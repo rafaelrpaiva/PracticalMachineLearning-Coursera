@@ -1,0 +1,135 @@
+---
+title: "Machine Learning Model for Quality of Exercises Prediction"
+author: "Rafael Rodrigues de Paiva"
+date: "Tuesday, July 21, 2015"
+output: html_document
+---
+
+##Summary
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+This project has the purpose to predict the manner in which users perform the exercises. There are 5 possible results, reported in the $classe$ variable:
+
+* A: exactly according to the specification
+* B: throwing the elbows to the front
+* C: lifting the dumbbell only halfway
+* D: lowering the dumbbell only halfway
+* E: throwing the hips to the front
+
+For prediction, we will use the training data available in pml-training.csv available in:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The final dataset we want to predict is available in: 
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The steps for prediction include:
+1. Loading and tidying the data
+2. Build training and testing data using the information available for cross validation.
+3. Running the prediction algorithm using R function $train$.
+4. Using the model defined, running the $predict$ function and compare to the results known.
+5. Finally, running the prediction model into the testing dataset, creating the answers for the dataset.
+
+##Step 1: Loading Libraries and Data
+
+The first step is loading the libraries and the datasets available in the links above. Since the training algorithm will process many lines of data, we will use parallel processing in R, which is easily setup using $doParallel$ library. Also, $caret$ package will be used for creating the partitions, running the training model and predicting data.
+```{r}
+library(caret)
+library(doParallel)
+# Creating a seed will assure future reproducibility.
+set.seed(171178)
+
+# Loading the datasets, defining some strings as NA. 
+trainingDS <- read.csv("./pml-training.csv", na.strings=c("NA","#DIV/0!", ""))
+testingDS <- read.csv("./pml-testing.csv", na.strings=c("NA","#DIV/0!", ""))
+
+dim(trainingDS)
+dim(testingDS)
+
+```
+
+##Step 2: Cleaning data
+
+As we observe the training and testing dataset, two points are important for creating a better prediction model: the first point is that there are some columns that, for most of observations, don't carry relevant information, pretty much mapping $NA$ data. The second point is that some columns aren't relevant for the prediction, like the $X$ column in both datasets and $problem\_id$ in testing dataset, which are basically line counters and don't aggregate relevant information for prediction.
+
+```{r}
+
+# For filtering relevant data, it's used the suggestion posted by Himanshu Rawat in
+# https://class.coursera.org/predmachlearn-030/forum/thread?thread_id=61
+# The code below filters columns that NA represents at least 50% of total data.
+goodData <- colSums(is.na(trainingDS)) < nrow(trainingDS) * 0.5
+trainingFilter <- trainingDS[, goodData]
+testingFilter <- testingDS[, goodData]
+# Removing the x column in both datasets and problem_d in testing dataset.
+trainingFilter <- trainingFilter[, -1]
+testingFilter <- testingFilter[, -c(1, length(testingFilter))]
+
+```
+
+##Step 3: Creating data partition for cross-validation and running training model
+
+For cross validation, we will split training dataset in 2 part, following the rule "60% training / 40% testing". For the training algorithm, we've chosen the Random Forest with a 4-fold cross validation for resampling. If the accuracy is proven to be good enough, we will not follow other models because it is not the purpose of this work comparing accuracies.
+
+```{r}
+inTrain  <- createDataPartition(trainingFilter$classe, p = 0.6, list = FALSE)
+trainingCV <- trainingFilter[inTrain, ]
+testingCV <- trainingFilter[-inTrain, ]
+
+# Using 3 cores for parallel processing, which was ok using an Intel i5 CPU and 6GB RAM.
+registerDoParallel(cores = 3)
+# For more details about Random Forest in R, see http://topepo.github.io/caret/Random_Forest.html
+# Relating to train control: http://topepo.github.io/caret/training.html#custom
+modFit <- train(classe ~., method="rf", trControl=trainControl(method = "cv", number = 4), data=trainingCV)
+modFit
+```
+
+##Step 4: Cross-validation for the model built
+
+After running the model fitted, we will validate how accurate it is based on the testing dataset created during data partition. The results are presented below:
+
+```{r}
+predictedTesting <- predict(modFit, newdata=testingCV)
+confMatrix <- confusionMatrix(predictedTesting,testingCV$classe)
+confMatrix
+```
+
+It is important to realize that the model created has got an accuracy of `r round(confMatrix$overall[1]*100,2)`%, which is a good accuracy for predictions.
+
+##Step 5: Running prediction for new unknown data
+
+Finally, after testing the model above, we can run the data for the new testing dataset, whose results are unkown and will be tested in a specific interface into "Practical Machine Learning" course from John Hopkins University on Coursera - the reason we created and run the function $pml\_write\_files$.
+
+```{r}
+
+# Running the final prediction for the original testing dataset, Which contains 20 observations to be predicted.
+finalPredict <- predict(modFit, newdata=testingFilter)
+print(finalPredict)
+
+pml_write_files = function(x){
+    n = length(x)
+    for(i in 1:n){
+        filename = paste0("problem_id_",i,".txt")
+        write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+    }
+}
+
+## Using pml_write_files for writing the files - requested by course. Commented after the first execution for not repeating every time.
+## pml_write_files(finalPredict)
+```
+
+##Conclusions
+
+The final model built for this project resulted in the following 20 predicted classes for the testing dataset:
+```{r, echo=FALSE}
+print(finalPredict)
+```
+
+This submitted answer resulted in 100% "You are correct!" in the Coursera interface. Since we don't know the way this correction is made, we can't affirm that we had an 100% accuracy, but the final results were really efficient, in a general sense.
+
+It's important to reinforce that these datasets raise another interesting discussion, related to the quality of exercises and helping health professionals to follow your users by analysing data. As we can see in the plot below, most of exercises reported don't follow the specification, which represents a typical user behaviour.
+
+```{r, echo=FALSE}
+plot(table(trainingDS$user_name, trainingDS$classe), main="Classe distribution by User")
+```
+
+Following the information and using models like these will help to mitigate risks of injuries  and produce healthier fitness programs.
